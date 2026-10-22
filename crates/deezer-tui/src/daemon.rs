@@ -3876,6 +3876,29 @@ impl Daemon {
         // track to show up under Favorites > Recently Played.
         self.maybe_log_listen();
 
+        // A streamed track that lost its connection ends early: report it, and
+        // finish it from the downloaded copy if there is one.
+        let stream_err = self
+            .engine
+            .as_mut()
+            .filter(|engine| engine.is_finished())
+            .and_then(|engine| engine.take_stream_error());
+        if let Some(err) = stream_err {
+            warn!(err = %err, "on_tick: stream failed mid-track");
+            let local = self
+                .player_state
+                .lock()
+                .ok()
+                .and_then(|state| state.current_track.clone())
+                .filter(|track| self.offline_index.has_track(&track.track_id));
+            if let Some(track) = local {
+                info!(track_id = %track.track_id, "on_tick: falling back to the downloaded copy");
+                self.start_play_offline_track(track);
+                return;
+            }
+            self.status_msg = Some(t().fmt_error(t().status_track_error, &err));
+        }
+
         // Auto-advance when track finishes
         if let Some(ref engine) = self.engine {
             if engine.is_finished() {

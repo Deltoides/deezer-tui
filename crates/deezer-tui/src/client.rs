@@ -1889,7 +1889,6 @@ pub struct Client {
     last_terminal_title: String,
 }
 
-/// Helper to restore standard terminal mode safely.
 /// Put the tty back in raw mode if something took it out behind our back.
 ///
 /// The terminal-graphics probe (`Picker::from_query_stdio`) reads the reply on
@@ -1914,6 +1913,7 @@ fn ensure_raw_mode() {
 #[cfg(not(unix))]
 fn ensure_raw_mode() {}
 
+/// Helper to restore standard terminal mode safely.
 pub fn restore_terminal() {
     let mut stdout = io::stdout();
     let _ = stdout.execute(DisableMouseCapture);

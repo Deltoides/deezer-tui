@@ -8,7 +8,7 @@ use tracing::{debug, info};
 use crate::api::models::{AudioQuality, DeezerError, TrackData};
 use crate::player::eq::{EqHandle, Equalizer};
 use crate::player::state::{PlaybackStatus, PlayerState};
-use crate::player::stream::StreamReader;
+use crate::player::stream::{StreamHandle, StreamReader};
 
 /// Audio handed to the engine: a fully downloaded file (offline tracks,
 /// podcast episodes) or a track still streaming from the CDN.
@@ -37,6 +37,13 @@ impl AudioInput {
             Self::Stream(_) => None,
         }
     }
+
+    fn stream_handle(&self) -> Option<StreamHandle> {
+        match self {
+            Self::Bytes(_) => None,
+            Self::Stream(s) => Some(s.handle()),
+        }
+    }
 }
 
 impl Read for AudioInput {
@@ -63,6 +70,8 @@ pub struct PlayerEngine {
     stream_handle: OutputStreamHandle,
     sink: Sink,
     eq: EqHandle,
+    /// Download behind the current track, when it is streamed from the CDN.
+    stream: Option<StreamHandle>,
 }
 
 impl PlayerEngine {
@@ -87,6 +96,7 @@ impl PlayerEngine {
             stream_handle,
             sink,
             eq,
+            stream: None,
         })
     }
 
@@ -102,12 +112,20 @@ impl PlayerEngine {
         track: &TrackData,
         quality: AudioQuality,
     ) -> Result<(), DeezerError> {
-        let source = Decoder::new(audio.into())
+        let audio = audio.into();
+        let stream = audio.stream_handle();
+        let source = Decoder::new(audio)
             .map_err(|e| DeezerError::Playback(format!("Failed to decode audio: {e}")))?;
         let source = Equalizer::new(source, self.eq.clone());
 
         // Preserve current volume before recreating the sink
         let current_volume = self.state.lock().unwrap().volume;
+
+        // The previous track may be blocked on the network inside the audio
+        // thread: cancel its stream so stopping the sink takes effect now.
+        if let Some(old) = std::mem::replace(&mut self.stream, stream) {
+            old.cancel();
+        }
 
         // Clear the current sink and create a fresh one (Sink can't be reused after stop)
         self.sink.stop();
@@ -160,6 +178,9 @@ impl PlayerEngine {
     }
 
     pub fn stop(&mut self) {
+        if let Some(stream) = self.stream.take() {
+            stream.cancel();
+        }
         self.sink.stop();
         // Recreate sink for future use
         if let Ok(new_sink) = Sink::try_new(&self.stream_handle) {
@@ -191,5 +212,13 @@ impl PlayerEngine {
 
     pub fn is_finished(&self) -> bool {
         self.sink.empty()
+    }
+
+    /// Why the current track's download gave up (network lost beyond the
+    /// resume attempts), so the track ended early. Returned once.
+    pub fn take_stream_error(&mut self) -> Option<String> {
+        let err = self.stream.as_ref()?.error()?;
+        self.stream = None;
+        Some(err)
     }
 }
