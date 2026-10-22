@@ -34,6 +34,11 @@ const TICK_RATE: Duration = Duration::from_millis(250);
 /// is still streaming: bytes map to time only roughly (FLAC is VBR).
 const SEEK_SAFETY_MARGIN_SECS: u64 = 5;
 
+/// Audio the current track must have downloaded ahead of playback before the
+/// next one starts downloading, so the two only share the link once the
+/// current one is safe.
+const PREFETCH_MIN_AHEAD_SECS: f64 = 20.0;
+
 /// Async results from background tasks.
 enum AsyncResult {
     LoginSuccess(String),
@@ -2532,10 +2537,10 @@ impl Daemon {
         state.queue.get(idx).cloned()
     }
 
-    /// Fetch the next track as soon as the current one has fully downloaded
-    /// (it streams to a cache file, not RAM), so it is queued for a gapless
-    /// start long before it is needed. Waiting for the current download means
-    /// the two never compete for bandwidth.
+    /// Fetch the next track as soon as the current one is buffered far enough
+    /// ahead (it streams to a cache file, not RAM), so it is queued for a
+    /// gapless start long before it is needed. Until then the current download
+    /// keeps the whole link.
     fn maybe_prefetch_next(&mut self) {
         if self.is_offline {
             return;
@@ -2546,13 +2551,17 @@ impl Daemon {
         let Some(engine) = self.engine.as_ref() else {
             return;
         };
-        if engine.stream_progress().is_some() {
-            return;
-        }
         {
             let state = self.player_state.lock().unwrap();
             if state.status != PlaybackStatus::Playing {
                 return;
+            }
+            // Still downloading: wait until enough is buffered ahead.
+            if let Some(progress) = engine.stream_progress() {
+                let buffered_secs = progress * state.duration_secs as f64;
+                if buffered_secs < state.position_secs as f64 + PREFETCH_MIN_AHEAD_SECS {
+                    return;
+                }
             }
         }
         let Some(next) = self.peek_next_track() else {

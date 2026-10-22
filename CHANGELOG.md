@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - Tracks start playing almost immediately, even in FLAC
 - Tracks follow each other with no gap
+- Next track (`n`) starts instantly, a couple of seconds after a track begins
 - Lower memory use while playing
 - Playback picks up again by itself after a short network drop
 
