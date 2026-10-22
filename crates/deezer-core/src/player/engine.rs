@@ -2,11 +2,12 @@ use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use tracing::{debug, info};
 
 use crate::api::models::{AudioQuality, DeezerError, TrackData};
 use crate::player::eq::{EqHandle, Equalizer};
+use crate::player::flac::{self, FlacDecoder};
 use crate::player::state::{PlaybackStatus, PlayerState};
 use crate::player::stream::{StreamHandle, StreamReader};
 
@@ -35,6 +36,15 @@ impl AudioInput {
         match self {
             Self::Bytes(c) => Some(c.get_ref().len()),
             Self::Stream(_) => None,
+        }
+    }
+
+    /// Bytes readable without waiting: everything for a downloaded file, what
+    /// has arrived so far for a stream.
+    pub fn available_len(&self) -> u64 {
+        match self {
+            Self::Bytes(c) => c.get_ref().len() as u64,
+            Self::Stream(s) => s.available_len(),
         }
     }
 
@@ -112,10 +122,17 @@ impl PlayerEngine {
         track: &TrackData,
         quality: AudioQuality,
     ) -> Result<(), DeezerError> {
-        let audio = audio.into();
+        let mut audio = audio.into();
         let stream = audio.stream_handle();
-        let source = Decoder::new(audio)
-            .map_err(|e| DeezerError::Playback(format!("Failed to decode audio: {e}")))?;
+        // rodio's own decoder cannot seek in FLAC (see `flac`); MP3 keeps it.
+        let source: Box<dyn Source<Item = i16> + Send> = if flac::is_flac(&mut audio) {
+            Box::new(FlacDecoder::new(audio)?)
+        } else {
+            Box::new(
+                Decoder::new(audio)
+                    .map_err(|e| DeezerError::Playback(format!("Failed to decode audio: {e}")))?,
+            )
+        };
         let source = Equalizer::new(source, self.eq.clone());
 
         // Preserve current volume before recreating the sink

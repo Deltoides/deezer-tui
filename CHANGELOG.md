@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 - Seeking forward on a track still loading stops at the downloaded part instead of freezing the player
 
 ### Fixed
+- Seeking (`Ctrl+←` / `Ctrl+→`) now works in FLAC; it never did before
 - Progress bar follows the audio actually played (no drift while the network is slow)
 - Moving the mouse could print `^[[<35;…M` garbage in the terminal when it was slow to answer the image-support check at startup
 

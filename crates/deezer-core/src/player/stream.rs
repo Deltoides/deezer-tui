@@ -227,6 +227,11 @@ impl StreamReader {
     pub fn handle(&self) -> StreamHandle {
         StreamHandle(Arc::clone(&self.buf))
     }
+
+    /// Bytes readable right now without waiting on the network.
+    pub fn available_len(&self) -> u64 {
+        self.buf.state.lock().unwrap().data.len() as u64
+    }
 }
 
 fn cancelled_error() -> io::Error {

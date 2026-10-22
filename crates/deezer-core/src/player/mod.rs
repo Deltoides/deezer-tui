@@ -1,5 +1,6 @@
 pub mod engine;
 pub mod eq;
+pub mod flac;
 pub mod state;
 pub mod stream;
 
