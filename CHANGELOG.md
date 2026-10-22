@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.20.2] - 2026-10-22
+
+### Fixed
+- Albums with more than 25 tracks now list and play all tracks (#33)
+- App no longer starts in offline mode on networks blocking 1.1.1.1: connectivity check now probes `www.deezer.com`, and a successful login clears offline mode (#34)
+
 ## [1.20.1] - 2026-10-08
 
 ### Fixed

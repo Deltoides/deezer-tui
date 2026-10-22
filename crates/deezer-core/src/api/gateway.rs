@@ -860,17 +860,35 @@ impl DeezerClient {
             .unwrap_or("")
             .to_string();
 
-        // Parse tracks from the "tracks.data" array
-        let track_ids: Vec<String> = resp
-            .get("tracks")
-            .and_then(|t| t.get("data"))
-            .and_then(|d| d.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|t| t.get("id").and_then(|v| v.as_u64()).map(|v| v.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // The embedded "tracks" list is capped at 25 with no "next" link, so
+        // fetch the dedicated tracks endpoint and follow its pagination.
+        let mut track_ids: Vec<String> = Vec::new();
+        let mut next_url = Some(format!(
+            "https://api.deezer.com/album/{}/tracks?limit=1000",
+            album_id
+        ));
+        while let Some(url) = next_url.take() {
+            let page: serde_json::Value = self
+                .http
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| DeezerError::Http(e.to_string()))?
+                .json()
+                .await
+                .map_err(|e| DeezerError::Http(e.to_string()))?;
+            if let Some(arr) = page.get("data").and_then(|d| d.as_array()) {
+                track_ids.extend(
+                    arr.iter().filter_map(|t| {
+                        t.get("id").and_then(|v| v.as_u64()).map(|v| v.to_string())
+                    }),
+                );
+            }
+            next_url = page
+                .get("next")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+        }
 
         // Fetch full track data via gw-light (includes TRACK_TOKEN)
         let track_id_refs: Vec<&str> = track_ids.iter().map(|s| s.as_str()).collect();

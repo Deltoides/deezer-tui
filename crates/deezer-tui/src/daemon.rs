@@ -296,12 +296,15 @@ impl Daemon {
         let initial_quality = config.quality;
         let eq = EqHandle::new(&config.equalizer);
 
-        // Check network connectivity
-        let is_offline = std::net::TcpStream::connect_timeout(
-            &std::net::SocketAddr::from(([1, 1, 1, 1], 53)),
-            Duration::from_secs(2),
-        )
-        .is_err();
+        // Check network connectivity against Deezer itself (a public DNS
+        // server may be blocked on networks where Deezer is reachable).
+        let is_offline = !std::net::ToSocketAddrs::to_socket_addrs("www.deezer.com:443")
+            .map(|mut addrs| {
+                addrs.any(|addr| {
+                    std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)).is_ok()
+                })
+            })
+            .unwrap_or(false);
 
         let screen = if is_offline {
             Screen::Main
@@ -2913,6 +2916,8 @@ impl Daemon {
         while let Ok(result) = self.async_rx.try_recv() {
             match result {
                 AsyncResult::LoginSuccess(name) => {
+                    // A successful login proves Deezer is reachable.
+                    self.is_offline = false;
                     self.login_loading = false;
                     self.screen = Screen::Main;
                     self.user_name = Some(name.clone());
