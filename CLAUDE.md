@@ -32,7 +32,8 @@ deezer-tui/
 │   │       │   ├── mod.rs
 │   │       │   ├── engine.rs     # rodio/cpal playback, queue management
 │       │   ├── eq.rs         # 10-band biquad equalizer (rodio Source wrapper)
-│   │       │   ├── stream.rs     # HTTP progressive streaming + decrypt
+│   │       │   ├── flac.rs       # Seekable FLAC decoder (symphonia)
+│   │       │   ├── stream.rs     # Progressive streaming + decrypt, backed by an anonymous cache file
 │   │       │   └── state.rs      # Player state (playing, paused, position, volume)
 │   │       └── config.rs   # Configuration (credentials, quality prefs)
 │   │

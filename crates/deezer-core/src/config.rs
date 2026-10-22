@@ -74,6 +74,13 @@ impl Config {
             .map(|p| p.data_local_dir().to_path_buf())
     }
 
+    /// Cache directory (XDG cache on Linux). Holds the anonymous files that
+    /// back tracks while they stream.
+    pub fn cache_dir() -> Option<PathBuf> {
+        ProjectDirs::from(APP_QUALIFIER, APP_ORGANIZATION, APP_NAME)
+            .map(|p| p.cache_dir().to_path_buf())
+    }
+
     /// Full path to the config file.
     pub fn path() -> Option<PathBuf> {
         Self::dir().map(|d| d.join("config.json"))

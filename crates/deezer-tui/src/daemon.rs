@@ -34,10 +34,6 @@ const TICK_RATE: Duration = Duration::from_millis(250);
 /// is still streaming: bytes map to time only roughly (FLAC is VBR).
 const SEEK_SAFETY_MARGIN_SECS: u64 = 5;
 
-/// How long before the end of the current track the next one is fetched, so
-/// the transition has no loading gap.
-const PREFETCH_LEAD_SECS: u64 = 30;
-
 /// Async results from background tasks.
 enum AsyncResult {
     LoginSuccess(String),
@@ -2536,8 +2532,9 @@ impl Daemon {
         state.queue.get(idx).cloned()
     }
 
-    /// Near the end of the current track, fetch the next one so it starts
-    /// without a loading gap. Waits for the current download to finish, so
+    /// Fetch the next track as soon as the current one has fully downloaded
+    /// (it streams to a cache file, not RAM), so it is queued for a gapless
+    /// start long before it is needed. Waiting for the current download means
     /// the two never compete for bandwidth.
     fn maybe_prefetch_next(&mut self) {
         if self.is_offline {
@@ -2554,10 +2551,7 @@ impl Daemon {
         }
         {
             let state = self.player_state.lock().unwrap();
-            if state.status != PlaybackStatus::Playing
-                || state.duration_secs == 0
-                || state.position_secs + PREFETCH_LEAD_SECS < state.duration_secs
-            {
+            if state.status != PlaybackStatus::Playing {
                 return;
             }
         }

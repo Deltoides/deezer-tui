@@ -5,15 +5,17 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
-- Tracks start playing after a few seconds of buffering instead of after the whole file is downloaded (faster skips, especially in FLAC)
-- Streamed tracks resume automatically after a dropped or stalled connection; skipping works instantly even when the network hangs
-- Gapless playback: the next track is fetched during the last 30 seconds of the current one and queued behind it, so tracks follow each other with no gap (sample-exact)
-- Seeking forward on a track still loading stops at the downloaded part instead of freezing the player
+- Tracks start playing almost immediately, even in FLAC
+- Tracks follow each other with no gap
+- Lower memory use while playing
+- Playback picks up again by itself after a short network drop
 
 ### Fixed
-- Seeking (`Ctrl+←` / `Ctrl+→`) now works in FLAC; it never did before
-- Progress bar follows the audio actually played (no drift while the network is slow)
-- Moving the mouse could print `^[[<35;…M` garbage in the terminal when it was slow to answer the image-support check at startup
+- Seeking (`Ctrl+←` / `Ctrl+→`) works in FLAC
+- Seeking forward on a track still loading no longer freezes the player
+- Skipping no longer hangs when the network stalls
+- Progress bar no longer runs ahead of the audio on a slow network
+- Mouse moves no longer print `^[[<35;…M` garbage in the terminal
 
 ## [1.20.2] - 2026-10-22
 

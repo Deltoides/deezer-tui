@@ -1,4 +1,7 @@
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom};
+use std::os::unix::fs::FileExt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -7,6 +10,7 @@ use tracing::{debug, info, warn};
 use crate::api::models::{AudioQuality, DeezerError, TrackData};
 use crate::api::DeezerClient;
 use crate::decrypt::{self, BLOCK_SIZE};
+use crate::Config;
 
 /// Bytes buffered before playback starts (~2 s of FLAC, ~16 s of MP3 128).
 const PREBUFFER_BYTES: usize = 256 * 1024;
@@ -125,16 +129,23 @@ pub async fn download_direct(url: &str, http: &reqwest::Client) -> Result<Vec<u8
 
 /// Decrypted audio shared between the download task (writer) and the decoder
 /// (reader). Grows as blocks arrive; readers block until their bytes are there.
+///
+/// The bytes live in an anonymous cache file rather than in memory, so a
+/// track (or the next one, prefetched) costs disk, not RAM.
 struct StreamBuffer {
     state: Mutex<StreamState>,
     grew: Condvar,
     /// Full file size from `Content-Length`, needed to answer `SeekFrom::End`.
     total_len: Option<u64>,
+    /// Written only at offsets `>= len` by the single writer and read only
+    /// below `len`, so positional I/O needs no lock around it.
+    file: File,
 }
 
 #[derive(Default)]
 struct StreamState {
-    data: Vec<u8>,
+    /// Bytes written to `file` so far.
+    len: u64,
     done: bool,
     /// Set when the track is skipped or stopped: the download stops and any
     /// read blocked on missing bytes returns. Kept under the lock so a waiting
@@ -144,33 +155,63 @@ struct StreamState {
     error: Option<String>,
 }
 
+/// Create a file in the cache directory and unlink it straight away: it has no
+/// name, and the system frees it when the stream is dropped, even if the
+/// daemon crashes. The cache directory is used rather than `/tmp`, which is
+/// often a RAM-backed tmpfs.
+fn anonymous_cache_file() -> io::Result<File> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let dir = Config::cache_dir().unwrap_or_else(std::env::temp_dir);
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!(
+        "stream-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    std::fs::remove_file(&path)?;
+    Ok(file)
+}
+
 impl StreamBuffer {
-    fn new(total_len: Option<u64>) -> Self {
-        Self {
+    fn new(total_len: Option<u64>) -> io::Result<Self> {
+        Ok(Self {
             state: Mutex::new(StreamState::default()),
             grew: Condvar::new(),
             total_len,
-        }
+            file: anonymous_cache_file()?,
+        })
+    }
+
+    fn len(&self) -> u64 {
+        self.state.lock().unwrap().len
     }
 
     /// Append decrypted bytes, wake readers, return the new length.
-    fn append(&self, bytes: &[u8]) -> usize {
+    fn append(&self, bytes: &[u8]) -> io::Result<usize> {
+        // Only this (single) writer moves `len`, so it cannot change under us.
+        let offset = self.len();
+        self.file.write_all_at(bytes, offset)?;
         let len = {
             let mut st = self.state.lock().unwrap();
-            st.data.extend_from_slice(bytes);
-            st.data.len()
+            st.len = offset + bytes.len() as u64;
+            st.len
         };
         self.grew.notify_all();
-        len
+        Ok(len as usize)
     }
 
     /// Mark the download over, successfully or not; return the final length.
-    fn finish(&self, error: Option<String>) -> usize {
+    fn finish(&self, error: Option<String>) -> u64 {
         let len = {
             let mut st = self.state.lock().unwrap();
             st.done = true;
             st.error = error;
-            st.data.len()
+            st.len
         };
         self.grew.notify_all();
         len
@@ -202,6 +243,7 @@ impl StreamHandle {
     pub fn error(&self) -> Option<String> {
         self.0.state.lock().unwrap().error.clone()
     }
+
     /// Share of the file downloaded so far, or `None` once the download is
     /// over. `Some(0.0)` when the server sent no `Content-Length`.
     pub fn progress(&self) -> Option<f64> {
@@ -210,7 +252,7 @@ impl StreamHandle {
             return None;
         }
         Some(match self.0.total_len {
-            Some(total) if total > 0 => (st.data.len() as f64 / total as f64).min(1.0),
+            Some(total) if total > 0 => (st.len as f64 / total as f64).min(1.0),
             _ => 0.0,
         })
     }
@@ -230,7 +272,7 @@ impl StreamReader {
 
     /// Bytes readable right now without waiting on the network.
     pub fn available_len(&self) -> u64 {
-        self.buf.state.lock().unwrap().data.len() as u64
+        self.buf.len()
     }
 }
 
@@ -243,28 +285,29 @@ impl Read for StreamReader {
         if out.is_empty() {
             return Ok(0);
         }
-        let mut st = self.buf.state.lock().unwrap();
-        loop {
-            if st.cancelled {
-                return Err(cancelled_error());
+        let n = {
+            let mut st = self.buf.state.lock().unwrap();
+            loop {
+                if st.cancelled {
+                    return Err(cancelled_error());
+                }
+                if self.pos < st.len {
+                    break out.len().min((st.len - self.pos) as usize);
+                }
+                if st.done {
+                    // A failed download must not look like a complete track.
+                    return match &st.error {
+                        Some(e) => Err(io::Error::other(e.clone())),
+                        None => Ok(0),
+                    };
+                }
+                st = self.buf.grew.wait(st).unwrap();
             }
-            let len = st.data.len() as u64;
-            if self.pos < len {
-                let start = self.pos as usize;
-                let n = out.len().min(st.data.len() - start);
-                out[..n].copy_from_slice(&st.data[start..start + n]);
-                self.pos += n as u64;
-                return Ok(n);
-            }
-            if st.done {
-                // A failed download must not look like a complete track.
-                return match &st.error {
-                    Some(e) => Err(io::Error::other(e.clone())),
-                    None => Ok(0),
-                };
-            }
-            st = self.buf.grew.wait(st).unwrap();
-        }
+        };
+        // Below `len`, the file is complete and never rewritten.
+        self.buf.file.read_exact_at(&mut out[..n], self.pos)?;
+        self.pos += n as u64;
+        Ok(n)
     }
 }
 
@@ -285,7 +328,7 @@ impl Seek for StreamReader {
                         if st.cancelled {
                             return Err(cancelled_error());
                         }
-                        st.data.len() as u64
+                        st.len
                     }
                 };
                 total.checked_add_signed(d)
@@ -303,6 +346,10 @@ impl Drop for StreamReader {
     fn drop(&mut self) {
         self.buf.cancel();
     }
+}
+
+fn cache_error(e: io::Error) -> DeezerError {
+    DeezerError::Playback(format!("Stream cache file: {e}"))
 }
 
 /// GET the encrypted file from `offset` on. Also returns how many leading
@@ -359,7 +406,7 @@ async fn pump(
             Ok(Ok(Some(chunk))) => chunk,
             Ok(Ok(None)) => {
                 // Trailing partial block is never encrypted.
-                buf.append(&pending);
+                buf.append(&pending).map_err(cache_error)?;
                 return Ok(());
             }
             failure => {
@@ -410,7 +457,7 @@ async fn pump(
         for (i, block) in blocks.chunks_exact_mut(BLOCK_SIZE).enumerate() {
             decrypt::decrypt_block(block, first_block + i, track_key)?;
         }
-        written = buf.append(&blocks);
+        written = buf.append(&blocks).map_err(cache_error)?;
         if written >= PREBUFFER_BYTES {
             if let Some(tx) = ready_tx.take() {
                 let _ = tx.send(Ok(()));
@@ -432,7 +479,7 @@ pub async fn stream_and_decrypt(
     info!(track_id = %track_id, "Streaming track");
 
     let (resp, _) = open_stream(http, url, 0).await?;
-    let buf = Arc::new(StreamBuffer::new(resp.content_length()));
+    let buf = Arc::new(StreamBuffer::new(resp.content_length()).map_err(cache_error)?);
     let track_key = decrypt::derive_track_key(track_id, master_key);
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<Result<(), DeezerError>>();
 
@@ -472,7 +519,7 @@ mod tests {
 
     fn reader(total_len: Option<u64>) -> StreamReader {
         StreamReader {
-            buf: Arc::new(StreamBuffer::new(total_len)),
+            buf: Arc::new(StreamBuffer::new(total_len).unwrap()),
             pos: 0,
         }
     }
@@ -483,7 +530,7 @@ mod tests {
         let buf = Arc::clone(&r.buf);
         let writer = thread::spawn(move || {
             thread::sleep(Duration::from_millis(50));
-            buf.append(b"hello");
+            buf.append(b"hello").unwrap();
             buf.finish(None);
         });
         let mut out = Vec::new();
@@ -495,7 +542,7 @@ mod tests {
     #[test]
     fn failed_download_is_an_error_not_eof() {
         let mut r = reader(None);
-        r.buf.append(b"abc");
+        r.buf.append(b"abc").unwrap();
         r.buf.finish(Some("connection reset".into()));
         let mut out = [0u8; 8];
         assert_eq!(r.read(&mut out).unwrap(), 3);
@@ -527,7 +574,7 @@ mod tests {
     #[test]
     fn progress_tracks_download_until_done() {
         let r = reader(Some(1000));
-        r.buf.append(&[0u8; 250]);
+        r.buf.append(&[0u8; 250]).unwrap();
         assert_eq!(r.handle().progress(), Some(0.25));
         r.buf.finish(None);
         assert_eq!(r.handle().progress(), None);
