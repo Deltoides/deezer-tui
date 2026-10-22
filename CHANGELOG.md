@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - Tracks start playing after a few seconds of buffering instead of after the whole file is downloaded (faster skips, especially in FLAC)
 - Streamed tracks resume automatically after a dropped or stalled connection; skipping works instantly even when the network hangs
-- The next track is fetched during the last 30 seconds of the current one: no loading gap between tracks
+- Gapless playback: the next track is fetched during the last 30 seconds of the current one and queued behind it, so tracks follow each other with no gap (sample-exact)
 - Seeking forward on a track still loading stops at the downloaded part instead of freezing the player
 
 ### Fixed

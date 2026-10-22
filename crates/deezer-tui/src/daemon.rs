@@ -2370,6 +2370,21 @@ impl Daemon {
     }
 
     fn start_play_track(&mut self, track: TrackData) {
+        // Already queued in the engine (gapless): switch to it there instead
+        // of fetching it again. Only the bookkeeping of a track start is left.
+        if let Some(engine) = self.engine.as_mut() {
+            if engine.queued_track_id() == Some(track.track_id.as_str()) {
+                engine.play_queued();
+                self.track_generation += 1;
+                self.listen_logged_for = None;
+                self.consecutive_skip_count = 0;
+                self.status_msg = None;
+                info!(gen = self.track_generation, track_id = %track.track_id, title = %track.title, "start_play_track: switched to queued track");
+                return;
+            }
+            engine.cancel_queued();
+        }
+
         if self.is_offline {
             // Only `Command::PlayFromOffline*` used to reach the on-disk copy,
             // so `next`, `previous` and the end-of-track auto-advance all died
@@ -2554,6 +2569,7 @@ impl Daemon {
             .prefetch
             .as_ref()
             .is_some_and(|p| p.track_id == next.track_id && p.quality == quality)
+            || engine.queued_track_id() == Some(next.track_id.as_str())
         {
             return;
         }
@@ -2587,6 +2603,48 @@ impl Daemon {
             .await;
             let _ = tx.send(AsyncResult::Prefetched { track_id, result });
         });
+    }
+
+    /// Hand a prefetched next track to the engine, queued behind the current
+    /// one so it starts on the exact sample the current one ends.
+    fn maybe_queue_gapless(&mut self) {
+        if self.prefetch.as_ref().is_none_or(|p| p.ready.is_none()) {
+            return;
+        }
+        let Some(engine) = self.engine.as_ref() else {
+            return;
+        };
+        if engine.queued_track_id().is_some() || engine.is_finished() {
+            return;
+        }
+        let status = self.player_state.lock().unwrap().status;
+        if status != PlaybackStatus::Playing && status != PlaybackStatus::Paused {
+            return;
+        }
+        let Some(next) = self.peek_next_track() else {
+            return;
+        };
+        let quality = self.config.quality;
+        let Some(Prefetch {
+            ready: Some((reader, track, actual_quality)),
+            ..
+        }) = self
+            .prefetch
+            .take_if(|p| p.track_id == next.track_id && p.quality == quality)
+        else {
+            return;
+        };
+        if let Some(engine) = self.engine.as_mut() {
+            match engine.queue_next(reader, &track, actual_quality) {
+                Ok(()) => {
+                    info!(track_id = %track.track_id, "maybe_queue_gapless: next track queued")
+                }
+                // The track is fetched again normally when its turn comes.
+                Err(e) => {
+                    warn!(track_id = %track.track_id, err = %e, "maybe_queue_gapless: queueing failed")
+                }
+            }
+        }
     }
 
     /// Build a fresh shuffle cycle over `queue_len` tracks, starting at `start`
@@ -3881,6 +3939,30 @@ impl Daemon {
     }
 
     fn on_tick(&mut self) {
+        // The queued track took over without a gap: move the queue along.
+        // play_next lands on that track, which start_play_track recognizes.
+        if self
+            .engine
+            .as_ref()
+            .is_some_and(|engine| engine.queued_has_started())
+        {
+            info!("on_tick: gapless transition");
+            self.play_next();
+        }
+
+        // A queued track that is no longer next (queue edited, shuffle or
+        // repeat toggled) is dropped before it can start.
+        let next_id = self.peek_next_track().map(|t| t.track_id);
+        if let Some(engine) = self.engine.as_mut() {
+            if engine
+                .queued_track_id()
+                .is_some_and(|id| next_id.as_deref() != Some(id))
+            {
+                info!("on_tick: queued track is no longer next, dropping it");
+                engine.cancel_queued();
+            }
+        }
+
         // Update playback position from what the sink has actually played
         if let (Some(engine), Ok(mut state)) = (self.engine.as_ref(), self.player_state.lock()) {
             if state.status == PlaybackStatus::Playing {
@@ -3896,6 +3978,7 @@ impl Daemon {
         self.maybe_log_listen();
 
         self.maybe_prefetch_next();
+        self.maybe_queue_gapless();
 
         // A streamed track that lost its connection ends early: report it, and
         // finish it from the downloaded copy if there is one.
