@@ -7,8 +7,11 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - Tracks start playing after a few seconds of buffering instead of after the whole file is downloaded (faster skips, especially in FLAC)
 - Streamed tracks resume automatically after a dropped or stalled connection; skipping works instantly even when the network hangs
+- The next track is fetched during the last 30 seconds of the current one: no loading gap between tracks
+- Seeking forward on a track still loading stops at the downloaded part instead of freezing the player
 
 ### Fixed
+- Progress bar follows the audio actually played (no drift while the network is slow)
 - Moving the mouse could print `^[[<35;…M` garbage in the terminal when it was slow to answer the image-support check at startup
 
 ## [1.20.2] - 2026-10-22

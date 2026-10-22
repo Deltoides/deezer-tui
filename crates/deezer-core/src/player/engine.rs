@@ -214,6 +214,18 @@ impl PlayerEngine {
         self.sink.empty()
     }
 
+    /// Position in the track as actually played (follows seeks, and stays
+    /// put while the stream waits on the network).
+    pub fn position(&self) -> Duration {
+        self.sink.get_pos()
+    }
+
+    /// Share of the current track downloaded so far, or `None` when it is all
+    /// in memory (finished stream, offline file, podcast download).
+    pub fn stream_progress(&self) -> Option<f64> {
+        self.stream.as_ref()?.progress()
+    }
+
     /// Why the current track's download gave up (network lost beyond the
     /// resume attempts), so the track ended early. Returned once.
     pub fn take_stream_error(&mut self) -> Option<String> {

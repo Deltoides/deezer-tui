@@ -385,6 +385,7 @@ pub struct Strings {
     pub status_radio_tracks_error: &'static str,
     pub status_playback_error: &'static str,
     pub status_track_error: &'static str,
+    pub status_seek_buffering: &'static str,
     pub status_play_next: &'static str,
     pub status_added_to_queue: &'static str,
 
@@ -1007,6 +1008,7 @@ static EN: Strings = Strings {
     status_radio_tracks_error: "Radio tracks error",
     status_playback_error: "Playback error",
     status_track_error: "Track error",
+    status_seek_buffering: "Not loaded yet: seek limited to the downloaded part",
     status_play_next: "Will play next",
     status_added_to_queue: "Added to queue",
 
@@ -1353,6 +1355,7 @@ static FR: Strings = Strings {
     status_radio_tracks_error: "Erreur des titres radio",
     status_playback_error: "Erreur de lecture",
     status_track_error: "Erreur du titre",
+    status_seek_buffering: "Pas encore chargé : avance limitée à la partie téléchargée",
     status_play_next: "Sera lu ensuite",
     status_added_to_queue: "Ajouté à la file d'attente",
 
@@ -1699,6 +1702,7 @@ static ES: Strings = Strings {
     status_radio_tracks_error: "Error de canciones de radio",
     status_playback_error: "Error de reproducción",
     status_track_error: "Error de canción",
+    status_seek_buffering: "Aún no cargado: avance limitado a la parte descargada",
     status_play_next: "Se reproducirá después",
     status_added_to_queue: "Agregado a la cola",
 
@@ -2045,6 +2049,7 @@ static PT: Strings = Strings {
     status_radio_tracks_error: "Erro das músicas da rádio",
     status_playback_error: "Erro de reprodução",
     status_track_error: "Erro da música",
+    status_seek_buffering: "Ainda não carregado: avanço limitado à parte baixada",
     status_play_next: "Será reproduzida em seguida",
     status_added_to_queue: "Adicionado à fila",
 
@@ -2391,6 +2396,7 @@ static DE: Strings = Strings {
     status_radio_tracks_error: "Radio-Titel-Fehler",
     status_playback_error: "Wiedergabefehler",
     status_track_error: "Titelfehler",
+    status_seek_buffering: "Noch nicht geladen: Spulen auf den geladenen Teil begrenzt",
     status_play_next: "Wird als Nächstes abgespielt",
     status_added_to_queue: "Zur Warteschlange hinzugefügt",
 

@@ -202,6 +202,18 @@ impl StreamHandle {
     pub fn error(&self) -> Option<String> {
         self.0.state.lock().unwrap().error.clone()
     }
+    /// Share of the file downloaded so far, or `None` once the download is
+    /// over. `Some(0.0)` when the server sent no `Content-Length`.
+    pub fn progress(&self) -> Option<f64> {
+        let st = self.0.state.lock().unwrap();
+        if st.done {
+            return None;
+        }
+        Some(match self.0.total_len {
+            Some(total) if total > 0 => (st.data.len() as f64 / total as f64).min(1.0),
+            _ => 0.0,
+        })
+    }
 }
 
 /// `Read + Seek` view over a track that is still downloading, so playback can
@@ -505,6 +517,15 @@ mod tests {
         assert_eq!(r.seek(SeekFrom::End(-10)).unwrap(), 990);
         assert_eq!(r.seek(SeekFrom::Current(-90)).unwrap(), 900);
         assert!(r.seek(SeekFrom::Current(-1000)).is_err());
+    }
+
+    #[test]
+    fn progress_tracks_download_until_done() {
+        let r = reader(Some(1000));
+        r.buf.append(&[0u8; 250]);
+        assert_eq!(r.handle().progress(), Some(0.25));
+        r.buf.finish(None);
+        assert_eq!(r.handle().progress(), None);
     }
 
     #[test]
