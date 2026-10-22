@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-10-22
+
 ### Changed
 - Tracks start playing almost immediately, even in FLAC
 - Tracks follow each other with no gap
