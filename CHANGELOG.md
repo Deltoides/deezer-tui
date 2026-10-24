@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Recently Played shows ♥ on tracks that are in your favorites
+
 ## [1.21.0] - 2026-10-22
 
 ### Changed
